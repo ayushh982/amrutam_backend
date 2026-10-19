@@ -1,0 +1,273 @@
+// Prisma Schema for Amrutam Telemedicine Backend
+// High performance, production-grade schema with UUIDs, indexes, constraints, and audit trails
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum UserRole {
+  PATIENT
+  DOCTOR
+  ADMIN
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum SlotStatus {
+  AVAILABLE
+  RESERVED
+  BOOKED
+  CANCELLED
+}
+
+enum ConsultationStatus {
+  BOOKED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+}
+
+model User {
+  id           String        @id @default(uuid())
+  email        String        @unique
+  passwordHash String        @map("password_hash")
+  role         UserRole      @default(PATIENT)
+  status       UserStatus    @default(ACTIVE)
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  profile      Profile?
+  doctor       Doctor?
+  patientConsultations Consultation[] @relation("PatientConsultations")
+  prescriptions Prescription[] @relation("PatientPrescriptions")
+  auditLogs    AuditLog[]     @relation("UserAuditLogs")
+
+  @@map("users")
+}
+
+model Profile {
+  id          String    @id @default(uuid())
+  userId      String    @unique @map("user_id")
+  name        String
+  phone       String?
+  dateOfBirth DateTime? @map("date_of_birth")
+  gender      String?
+  address     String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+model Doctor {
+  id                 String             @id @default(uuid())
+  userId             String             @unique @map("user_id")
+  specialization     String
+  licenseNumber      String             @unique @map("license_number")
+  consultationFee    Int                @default(50000) @map("consultation_fee") // in minor units (e.g. 50000 = 500.00 INR)
+  currency           String             @default("INR")
+  verificationStatus VerificationStatus @default(PENDING) @map("verification_status")
+  bio                String?
+  experienceYears    Int                @default(0) @map("experience_years")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slots         AvailabilitySlot[]
+  consultations Consultation[]     @relation("DoctorConsultations")
+  prescriptions Prescription[]     @relation("DoctorPrescriptions")
+
+  @@index([specialization, verificationStatus])
+  @@index([verificationStatus])
+  @@map("doctors")
+}
+
+model AvailabilitySlot {
+  id        String     @id @default(uuid())
+  doctorId  String     @map("doctor_id")
+  startAt   DateTime   @map("start_at")
+  endAt     DateTime   @map("end_at")
+  status    SlotStatus @default(AVAILABLE)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  doctor       Doctor        @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  consultation Consultation?
+
+  @@unique([doctorId, startAt, endAt])
+  @@index([doctorId, status, startAt])
+  @@map("availability_slots")
+}
+
+model Consultation {
+  id        String             @id @default(uuid())
+  patientId String             @map("patient_id")
+  doctorId  String             @map("doctor_id")
+  slotId    String             @unique @map("slot_id") // Strict 1:1 prevents double booking
+  status    ConsultationStatus @default(BOOKED)
+  reason    String
+  notes     String?
+  createdAt DateTime           @default(now()) @map("created_at")
+  updatedAt DateTime           @updatedAt @map("updated_at")
+
+  patient      User             @relation("PatientConsultations", fields: [patientId], references: [id], onDelete: Restrict)
+  doctor       Doctor           @relation("DoctorConsultations", fields: [doctorId], references: [id], onDelete: Restrict)
+  slot         AvailabilitySlot @relation(fields: [slotId], references: [id], onDelete: Restrict)
+  prescription Prescription?
+  payments     Payment[]
+
+  @@index([patientId, status, createdAt])
+  @@index([doctorId, status, createdAt])
+  @@map("consultations")
+}
+
+model Prescription {
+  id             String   @id @default(uuid())
+  consultationId String   @unique @map("consultation_id")
+  doctorId       String   @map("doctor_id")
+  patientId      String   @map("patient_id")
+  notes          String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  consultation Consultation       @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  doctor       Doctor             @relation("DoctorPrescriptions", fields: [doctorId], references: [id], onDelete: Restrict)
+  patient      User               @relation("PatientPrescriptions", fields: [patientId], references: [id], onDelete: Restrict)
+  items        PrescriptionItem[]
+
+  @@index([patientId, createdAt])
+  @@index([doctorId, createdAt])
+  @@map("prescriptions")
+}
+
+model PrescriptionItem {
+  id             String   @id @default(uuid())
+  prescriptionId String   @map("prescription_id")
+  medication     String
+  dosage         String
+  instructions   String
+  duration       String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@index([prescriptionId])
+  @@map("prescription_items")
+}
+
+model Payment {
+  id                String        @id @default(uuid())
+  consultationId    String        @map("consultation_id")
+  amount            Int // minor units (e.g. 50000 = 500.00 INR)
+  currency          String        @default("INR")
+  status            PaymentStatus @default(PENDING)
+  providerReference String?       @map("provider_reference")
+  idempotencyKey    String?       @unique @map("idempotency_key")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  consultation Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+
+  @@index([consultationId, status])
+  @@map("payments")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  actorId      String?  @map("actor_id")
+  action       String
+  resourceType String   @map("resource_type")
+  resourceId   String?  @map("resource_id")
+  outcome      String   // SUCCESS, FAILURE
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  details      Json?
+  timestamp    DateTime @default(now())
+
+  actor User? @relation("UserAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([timestamp])
+  @@index([actorId, timestamp])
+  @@index([resourceType, resourceId])
+  @@map("audit_logs")
+}
+
+model IdempotencyKey {
+  id             String   @id @default(uuid())
+  key            String   @unique
+  targetEndpoint String   @map("target_endpoint")
+  requestHash    String   @map("request_hash")
+  responseStatus Int?     @map("response_status")
+  responseBody   Json?    @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at")
+  expiresAt      DateTime @map("expires_at")
+
+  @@index([key, expiresAt])
+  @@map("idempotency_keys")
+}
+
+model OutboxEvent {
+  id            String       @id @default(uuid())
+  eventType     String       @map("event_type")
+  aggregateType String       @map("aggregate_type")
+  aggregateId   String       @map("aggregate_id")
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  retryCount    Int          @default(0) @map("retry_count")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  processedAt   DateTime?    @map("processed_at")
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}
+
+model WebhookEvent {
+  id          String        @id @default(uuid())
+  provider    String
+  eventId     String        @unique @map("event_id")
+  eventType   String        @map("event_type")
+  payload     Json
+  status      WebhookStatus @default(RECEIVED)
+  processedAt DateTime?     @map("processed_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@index([provider, eventId])
+  @@map("webhook_events")
+}

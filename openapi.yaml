@@ -1,0 +1,760 @@
+openapi: 3.0.3
+info:
+  title: Amrutam Telemedicine Backend API
+  version: 1.0.0
+  description: |
+    Production-grade, high-scale REST API for Amrutam's Telemedicine Platform.
+    Designed to support 100,000 daily consultations with strict concurrency controls,
+    distributed idempotency, comprehensive RBAC, transactional outbox pattern,
+    and audit logging.
+  contact:
+    name: Amrutam Backend Engineering Team
+    email: backend-team@amrutam.co.in
+servers:
+  - url: http://localhost:3000
+    description: Local Development Server
+  - url: https://api.amrutam.co.in
+    description: Production Cluster
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Enter your JWT Bearer token obtained from `/api/v1/auth/login` or `/api/v1/auth/register`.
+    IdempotencyKey:
+      type: apiKey
+      in: header
+      name: Idempotency-Key
+      description: Unique UUID v4 key preventing duplicate mutation execution on retries.
+    WebhookSignature:
+      type: apiKey
+      in: header
+      name: X-Webhook-Signature
+      description: HMAC SHA-256 signature calculated with the webhook secret.
+
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Operation completed successfully
+        requestId:
+          type: string
+          format: uuid
+
+    ApiError:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              example: Request payload validation failed
+            details:
+              type: array
+              items:
+                type: object
+        requestId:
+          type: string
+          format: uuid
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [PATIENT, DOCTOR, ADMIN]
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, SUSPENDED]
+        profile:
+          $ref: '#/components/schemas/Profile'
+        doctor:
+          $ref: '#/components/schemas/Doctor'
+
+    Profile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: Ramesh Kumar
+        phone:
+          type: string
+          example: "+919876543210"
+
+    Doctor:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        specialization:
+          type: string
+          example: Ayurveda General Medicine
+        licenseNumber:
+          type: string
+          example: AYUSH-DL-2024-9843
+        consultationFee:
+          type: integer
+          description: Consultation fee in minor currency units (paise)
+          example: 50000
+        currency:
+          type: string
+          example: INR
+        verificationStatus:
+          type: string
+          enum: [PENDING, VERIFIED, REJECTED]
+        bio:
+          type: string
+          example: Experienced Ayurvedic practitioner with 12+ years treating chronic metabolic disorders.
+        experienceYears:
+          type: integer
+          example: 12
+
+    AvailabilitySlot:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        doctorId:
+          type: string
+          format: uuid
+        startAt:
+          type: string
+          format: date-time
+          example: "2026-10-25T10:00:00.000Z"
+        endAt:
+          type: string
+          format: date-time
+          example: "2026-10-25T10:30:00.000Z"
+        status:
+          type: string
+          enum: [AVAILABLE, RESERVED, BOOKED, CANCELLED]
+
+    Consultation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        patientId:
+          type: string
+          format: uuid
+        doctorId:
+          type: string
+          format: uuid
+        slotId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [BOOKED, IN_PROGRESS, COMPLETED, CANCELLED, NO_SHOW]
+        reason:
+          type: string
+          example: Chronic digestive inflammation and joint fatigue
+        notes:
+          type: string
+
+    Prescription:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        consultationId:
+          type: string
+          format: uuid
+        doctorId:
+          type: string
+          format: uuid
+        patientId:
+          type: string
+          format: uuid
+        notes:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PrescriptionItem'
+
+    PrescriptionItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        medication:
+          type: string
+          example: Triphala Churna
+        dosage:
+          type: string
+          example: 1 teaspoon (5g)
+        instructions:
+          type: string
+          example: Take with warm water at bedtime
+        duration:
+          type: string
+          example: 14 days
+
+    Payment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        consultationId:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          example: 50000
+        currency:
+          type: string
+          example: INR
+        status:
+          type: string
+          enum: [PENDING, COMPLETED, FAILED, REFUNDED]
+        providerReference:
+          type: string
+          example: mock_pay_9f48ac127
+
+paths:
+  /api/v1/auth/register:
+    post:
+      summary: Register a new patient or doctor
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                  example: SecurePass123
+                name:
+                  type: string
+                  example: Priya Sharma
+                phone:
+                  type: string
+                  example: "+919876543210"
+                role:
+                  type: string
+                  enum: [PATIENT, DOCTOR]
+                  default: PATIENT
+                specialization:
+                  type: string
+                  example: Panchakarma
+                licenseNumber:
+                  type: string
+                  example: AYUSH-MH-4421
+                consultationFee:
+                  type: integer
+                  example: 60000
+      responses:
+        201:
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        409:
+          description: Email or license already exists
+
+  /api/v1/auth/login:
+    post:
+      summary: User login
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        200:
+          description: Login successful, returns JWT Bearer token
+        401:
+          description: Invalid email or password
+
+  /api/v1/users/me:
+    get:
+      summary: Get current authenticated user profile
+      tags: [Users]
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Current user profile
+        401:
+          description: Unauthorized
+
+  /api/v1/doctors:
+    get:
+      summary: Search and filter verified doctors
+      tags: [Doctors]
+      parameters:
+        - in: query
+          name: specialization
+          schema:
+            type: string
+        - in: query
+          name: minFee
+          schema:
+            type: integer
+        - in: query
+          name: maxFee
+          schema:
+            type: integer
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+      responses:
+        200:
+          description: List of matching doctors with pagination
+
+  /api/v1/doctors/{id}:
+    get:
+      summary: Get doctor profile by ID with upcoming availability
+      tags: [Doctors]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: Doctor details and available slots
+        404:
+          description: Doctor not found
+
+  /api/v1/doctors/{id}/slots:
+    get:
+      summary: Get doctor's availability slots
+      tags: [Availability]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [AVAILABLE, RESERVED, BOOKED, CANCELLED]
+            default: AVAILABLE
+      responses:
+        200:
+          description: List of availability slots
+
+    post:
+      summary: Create availability slot (Doctor/Admin only)
+      tags: [Availability]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [startAt, endAt]
+              properties:
+                startAt:
+                  type: string
+                  format: date-time
+                endAt:
+                  type: string
+                  format: date-time
+      responses:
+        201:
+          description: Slot created successfully
+        409:
+          description: Overlapping slot already exists
+
+  /api/v1/bookings:
+    post:
+      summary: Book a consultation slot
+      description: |
+        Protected against race conditions using row-level slot locking and database unique constraints.
+        Requires `Idempotency-Key` header to safely handle network retries.
+      tags: [Bookings]
+      security:
+        - BearerAuth: []
+        - IdempotencyKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slotId, reason]
+              properties:
+                slotId:
+                  type: string
+                  format: uuid
+                reason:
+                  type: string
+                  example: Chronic digestive migraine
+      responses:
+        201:
+          description: Booking confirmed
+        409:
+          description: Slot already booked or concurrent booking conflict
+        400:
+          description: Missing idempotency key or validation error
+
+    get:
+      summary: List user's bookings
+      tags: [Bookings]
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Paginated bookings list
+
+  /api/v1/bookings/{id}:
+    get:
+      summary: Get booking details
+      tags: [Bookings]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: Booking details
+        403:
+          description: Forbidden - Cross-patient data isolation enforced
+        404:
+          description: Booking not found
+
+  /api/v1/bookings/{id}/cancel:
+    patch:
+      summary: Cancel a booked consultation
+      tags: [Bookings]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  example: Rescheduled due to urgent personal travel
+      responses:
+        200:
+          description: Booking cancelled and slot released back to AVAILABLE
+
+  /api/v1/consultations/{id}:
+    get:
+      summary: Get consultation details
+      tags: [Consultations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: Consultation data
+
+  /api/v1/consultations/{id}/status:
+    patch:
+      summary: Transition consultation status (Doctor/Admin only)
+      description: Strictly enforces state machine (BOOKED -> IN_PROGRESS -> COMPLETED).
+      tags: [Consultations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [IN_PROGRESS, COMPLETED, NO_SHOW, CANCELLED]
+                notes:
+                  type: string
+      responses:
+        200:
+          description: Status updated successfully
+        400:
+          description: Invalid state transition
+
+  /api/v1/consultations/{id}/prescriptions:
+    post:
+      summary: Issue digital prescription (Doctor only)
+      tags: [Prescriptions]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                notes:
+                  type: string
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [medication, dosage, instructions, duration]
+                    properties:
+                      medication:
+                        type: string
+                      dosage:
+                        type: string
+                      instructions:
+                        type: string
+                      duration:
+                        type: string
+      responses:
+        201:
+          description: Prescription issued successfully
+        400:
+          description: Consultation not in IN_PROGRESS or COMPLETED status
+        409:
+          description: Prescription already exists for this consultation
+
+  /api/v1/consultations/{id}/prescription:
+    get:
+      summary: Retrieve prescription for a consultation
+      tags: [Prescriptions]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: Prescription details
+        403:
+          description: Forbidden - Cross-patient data isolation
+
+  /api/v1/payments:
+    post:
+      summary: Initiate consultation payment
+      tags: [Payments]
+      security:
+        - BearerAuth: []
+        - IdempotencyKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [consultationId, amount]
+              properties:
+                consultationId:
+                  type: string
+                  format: uuid
+                amount:
+                  type: integer
+                  description: Amount in minor units (paise)
+                  example: 50000
+                currency:
+                  type: string
+                  default: INR
+      responses:
+        201:
+          description: Payment initiated
+
+  /api/v1/payments/webhook:
+    post:
+      summary: Payment provider webhook endpoint
+      tags: [Payments]
+      security:
+        - WebhookSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventId, eventType, data]
+              properties:
+                eventId:
+                  type: string
+                eventType:
+                  type: string
+                  enum: [payment.succeeded, payment.failed]
+                provider:
+                  type: string
+                data:
+                  type: object
+                  required: [paymentId, providerReference, amount, currency]
+                  properties:
+                    paymentId:
+                      type: string
+                      format: uuid
+                    providerReference:
+                      type: string
+                    amount:
+                      type: integer
+                    currency:
+                      type: string
+      responses:
+        200:
+          description: Webhook processed (or deduplicated) successfully
+        401:
+          description: Invalid HMAC signature
+
+  /api/v1/admin/analytics:
+    get:
+      summary: Get platform analytics and business metrics
+      tags: [Admin]
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Platform analytics
+
+  /api/v1/admin/audit-logs:
+    get:
+      summary: Retrieve filterable audit log trail
+      tags: [Admin]
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Paginated audit logs
+
+  /api/v1/admin/doctors/{id}/verify:
+    patch:
+      summary: Verify or reject doctor profile
+      tags: [Admin]
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [VERIFIED, REJECTED]
+                reason:
+                  type: string
+      responses:
+        200:
+          description: Doctor verification updated
