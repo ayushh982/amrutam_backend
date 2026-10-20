@@ -42,10 +42,16 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate
 
+      - name: Run Prisma Migrations on CI database
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/amrutam_test_db?schema=public
+
       - name: Run Jest Test Suite (Concurrency, Idempotency, Security)
         run: npm test
         env:
           NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/amrutam_test_db?schema=public
           JWT_SECRET: ci-secret-key-for-testing-purpose-only-32
           PAYMENT_WEBHOOK_SECRET: ci_webhook_secret_key_12345
 
