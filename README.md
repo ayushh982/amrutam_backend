@@ -1,6 +1,6 @@
 # Amrutam Telemedicine Backend
 
-[![CI/CD Pipeline](https://github.com/amrutam/telemedicine-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/amrutam/telemedicine-backend/actions)
+[![CI/CD Pipeline](https://github.com/ayushh982/amrutam_backend/actions/workflows/ci.yml/badge.svg)](https://github.com/ayushh982/amrutam_backend/actions)
 [![Node.js](https://img.shields.io/badge/Node.js-v22-green.svg)](https://nodejs.org/)
 [![Database](https://img.shields.io/badge/PostgreSQL-16-blue.svg)](https://www.postgresql.org/)
 [![Prisma](https://img.shields.io/badge/Prisma-ORM-5A67D8.svg)](https://www.prisma.io/)
@@ -129,8 +129,8 @@ The backend follows a **Modular Monolith** architecture:
 ### 1. Installation
 Clone the repository and install dependencies:
 ```bash
-git clone https://github.com/amrutam/telemedicine-backend.git
-cd telemedicine-backend
+git clone https://github.com/ayushh982/amrutam_backend.git
+cd amrutam_backend
 npm install
 ```
 
@@ -144,7 +144,7 @@ cp .env.example .env
 |:---|:---|:---|
 | `NODE_ENV` | Environment mode (`development`, `test`, `production`) | `development` |
 | `PORT` | HTTP server port | `3000` |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://postgres:postgres@localhost:5432/amrutam_db?schema=public` |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://postgres:postgrespassword@localhost:5432/amrutam_db?schema=public` |
 | `JWT_SECRET` | Secret key for JWT signing (min 32 chars) | Required |
 | `JWT_EXPIRES_IN`| JWT expiration duration | `24h` |
 | `RATE_LIMIT_WINDOW_MS` | Rate limit window in milliseconds | `900000` (15m) |
